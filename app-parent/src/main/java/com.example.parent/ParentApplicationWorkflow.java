@@ -193,15 +193,15 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
       // Do something else here.
       Promise<List<String>> parentPromises = runParentActivities();
-      System.out.println(
-          "Got result in parent: " + String.join(";\n", parentPromises.get()) + "\n");
+//      System.out.println(
+//          "Got result in parent: " + String.join(";\n", parentPromises.get()) + "\n");
 
       return greeting.get(); // blocks waiting for the child to complete.
     }
 
     private Promise<List<String>> runParentActivities() {
       List<Promise<String>> parentActivities = new ArrayList<>();
-      for (int i = 0; i < 1; i++) {
+      for (int i = 0; i < 5; i++) {
         String taskList = SampleConstants.getTaskListParent();
         ActivityOptions ao = new ActivityOptions.Builder().setTaskList(taskList).build();
 
