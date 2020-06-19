@@ -19,7 +19,6 @@ package com.example.parent;
 
 import static com.example.parent.SampleConstants.DOMAIN;
 import static com.example.parent.SampleConstants.POLL_THREAD_COUNT;
-import static com.example.parent.SampleConstants.TASK_LIST_COUNT;
 
 import com.uber.cadence.DomainAlreadyExistsError;
 import com.uber.cadence.RegisterDomainRequest;
@@ -38,11 +37,13 @@ import com.uber.cadence.worker.WorkerOptions;
 import com.uber.cadence.workflow.Async;
 import com.uber.cadence.workflow.ChildWorkflowOptions;
 import com.uber.cadence.workflow.Promise;
+import com.uber.cadence.workflow.Saga;
 import com.uber.cadence.workflow.Workflow;
 import com.uber.cadence.workflow.WorkflowMethod;
 import com.uber.m3.tally.RootScopeBuilder;
 import com.uber.m3.tally.Scope;
-import com.uber.m3.util.Duration;
+import java.rmi.server.UID;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
@@ -68,7 +69,7 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     Scope scope =
         new RootScopeBuilder()
             .reporter(new CustomCadenceClientStatsReporter())
-            .reportEvery(Duration.ofSeconds(1));
+            .reportEvery(com.uber.m3.util.Duration.ofSeconds(1));
 
     PollerOptions pollerOptions =
         new PollerOptions.Builder().setPollThreadCount(POLL_THREAD_COUNT).build();
@@ -78,8 +79,7 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
     Worker.Factory factory = new Worker.Factory("127.0.0.1", 7933, DOMAIN, factoryOptions);
 
-    for (int i = 0; i < TASK_LIST_COUNT; i++) {
-      String taskList = SampleConstants.getTaskListParent(i);
+      String taskList = SampleConstants.getTaskListParent();
       WorkerOptions workerOptions =
           new WorkerOptions.Builder()
               .setWorkflowPollerOptions(pollerOptions)
@@ -91,7 +91,6 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
       workerParent.registerWorkflowImplementationTypes(GreetingWorkflowImpl.class);
       workerParent.registerActivitiesImplementations(new ParentActivitiesImpl());
-    }
 
     // Start listening to the workflow and activity task lists.
     factory.start();
@@ -129,11 +128,15 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
     while (true) {
       String taskList = SampleConstants.getTaskListParent();
-      WorkflowOptions options = new WorkflowOptions.Builder().setTaskList(taskList).build();
+      WorkflowOptions options = new WorkflowOptions.Builder()
+          .setTaskList(taskList)
+          .setWorkflowId(  new UID().toString() )
+          .build();
       parentWorkflow = workflowClient.newWorkflowStub(GreetingWorkflow.class, options);
       WorkflowClient.start(parentWorkflow::getGreeting, "World");
+      System.out.println( "Start new workflow:" +  options.getWorkflowId());
       try {
-        Thread.sleep(50);
+        Thread.sleep(1000);
 
       } catch (InterruptedException e) {
         log.error("Error occurred", e);
@@ -153,14 +156,20 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
   /** The child workflow interface. */
   public interface GreetingChild {
 
-    /** @return greeting string */
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
     String composeGreeting(String greeting, String name);
   }
 
+  /** The child workflow interface. */
+  public interface CompensationGreetingChild {
+
+    @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
+    void compensationGreeting(String greeting, String name);
+  }
+
   public interface ParentActivities {
 
-    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000, startToCloseTimeoutSeconds = 60)
+    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
     String composeParentGreeting(int activityIdx);
   }
 
@@ -181,29 +190,39 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
     @Override
     public String getGreeting(String name) {
+      Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
+
       String taskList = SampleConstants.getTaskListChild();
       ChildWorkflowOptions options =
-          new ChildWorkflowOptions.Builder().setTaskList(taskList).build();
+          new ChildWorkflowOptions.Builder()
+              .setTaskList(taskList)
+              .setExecutionStartToCloseTimeout(Duration.ofSeconds(10)) // 10 sec
+              .build();
 
       // Workflows are stateful. So a new stub must be created for each new child.
       GreetingChild child = Workflow.newChildWorkflowStub(GreetingChild.class, options);
+      // Workflows are stateful. So a new stub must be created for each new child.
+      CompensationGreetingChild childCompensation = Workflow.newChildWorkflowStub(CompensationGreetingChild.class, options);
 
       // This is a blocking call that returns only after the child has completed.
       Promise<String> greeting = Async.function(child::composeGreeting, "Hello", name);
 
       // Do something else here.
       Promise<List<String>> parentPromises = runParentActivities();
-//      System.out.println(
-//          "Got result in parent: " + String.join(";\n", parentPromises.get()) + "\n");
+
+      saga.addCompensation(childCompensation::compensationGreeting, "Buy", name);
 
       return greeting.get(); // blocks waiting for the child to complete.
     }
 
     private Promise<List<String>> runParentActivities() {
       List<Promise<String>> parentActivities = new ArrayList<>();
-      for (int i = 0; i < 5; i++) {
+      for (int i = 0; i < 1; i++) {
         String taskList = SampleConstants.getTaskListParent();
-        ActivityOptions ao = new ActivityOptions.Builder().setTaskList(taskList).build();
+        ActivityOptions ao = new ActivityOptions.Builder()
+            .setTaskList(taskList)
+            .setStartToCloseTimeout(Duration.ofSeconds(30)) // 30 sec for Parent
+            .build();
 
         ParentActivities activity = Workflow.newActivityStub(ParentActivities.class, ao);
         parentActivities.add(Async.function(activity::composeParentGreeting, i));

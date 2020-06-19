@@ -35,12 +35,10 @@ import com.uber.cadence.worker.WorkerOptions.Builder;
 import com.uber.cadence.workflow.*;
 import com.uber.m3.tally.RootScopeBuilder;
 import com.uber.m3.tally.Scope;
-import com.uber.m3.util.Duration;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.thrift.TException;
 import org.springframework.boot.ApplicationArguments;
@@ -62,7 +60,7 @@ public class ChildWorkflow implements ApplicationRunner {
     Scope scope =
         new RootScopeBuilder()
             .reporter(new CustomCadenceClientStatsReporter())
-            .reportEvery(Duration.ofSeconds(1));
+            .reportEvery(com.uber.m3.util.Duration.ofSeconds(1));
 
     PollerOptions pollerOptions =
         new PollerOptions.Builder().setPollThreadCount(POLL_THREAD_COUNT).build();
@@ -75,20 +73,20 @@ public class ChildWorkflow implements ApplicationRunner {
 
     Worker.Factory factory = new Worker.Factory("127.0.0.1", 7933, DOMAIN, factoryOptions);
 
-    for (int i = 0; i < TASK_LIST_COUNT; i++) {
-      String taskList = SampleConstants.getTaskListChild(i);
-      WorkerOptions workerOptions =
-          new Builder()
-              .setMetricsScope(scope)
-              .setActivityPollerOptions(pollerOptions)
-              .setWorkflowPollerOptions(pollerOptions)
-              .build();
+    String taskList = SampleConstants.getTaskListChild();
+    WorkerOptions workerOptions =
+        new Builder()
+            .setMetricsScope(scope)
+            .setActivityPollerOptions(pollerOptions)
+            .setWorkflowPollerOptions(pollerOptions)
+            .build();
 
-      Worker workerChild = factory.newWorker(taskList, workerOptions);
+    Worker workerChild = factory.newWorker(taskList, workerOptions);
 
-      workerChild.registerWorkflowImplementationTypes(GreetingChildImpl.class);
-      workerChild.registerActivitiesImplementations(new GreetingActivitiesImpl());
-    }
+    workerChild.registerWorkflowImplementationTypes(
+        GreetingChildImpl.class, CompensationChildImpl.class);
+    workerChild.registerActivitiesImplementations(
+        new GreetingActivitiesImpl(), new AfterGreetingActivitiesImpl());
 
     // Start listening to the workflow and activity task lists.
     factory.start();
@@ -120,15 +118,37 @@ public class ChildWorkflow implements ApplicationRunner {
 
   /** The child workflow interface. */
   public interface GreetingChild {
-    /** @return greeting string */
+
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
     String composeGreeting(String greeting, String name);
   }
 
+  /** The child workflow interface. */
+  public interface CompensationGreetingChild {
+
+    @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
+    void compensationGreeting(String greeting, String name);
+  }
+
   /** Activity interface is just to call external service and doNotCompleteActivity. */
   public interface GreetingActivities {
-    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000, startToCloseTimeoutSeconds = 60)
+
+    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
     String composeGreeting(String greeting, String name);
+  }
+
+  /** do Sync. */
+  public interface AfterGreetingActivities {
+
+    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
+    void afterGreeting(String greeting, String name);
+  }
+
+  public static class CompensationChildImpl implements CompensationGreetingChild {
+
+    public void compensationGreeting(String greeting, String name) {
+      System.out.println("Compensate Greeting " + greeting + name);
+    }
   }
 
   /**
@@ -137,34 +157,56 @@ public class ChildWorkflow implements ApplicationRunner {
    */
   public static class GreetingChildImpl implements GreetingChild {
 
+    public String compensateGreeting(String greeting, String name) {
+      System.out.println("Compensate Greeting " + greeting + name);
+      return null;
+    }
+
     public String composeGreeting(String greeting, String name) {
       long startSW = System.nanoTime();
-      List<Promise<String>> activities = new ArrayList<>();
 
-      for (int i = 0; i < ACTIVITIES_COUNT; i++) {
-        String taskList = getTaskListChild();
-        ActivityOptions ao = new ActivityOptions.Builder().setTaskList(taskList).build();
+      String taskList = getTaskListChild();
+      ActivityOptions ao =
+          new ActivityOptions.Builder()
+              .setTaskList(taskList)
+              .setStartToCloseTimeout(Duration.ofSeconds(10))
+              .build();
 
-        GreetingActivities activity = Workflow.newActivityStub(GreetingActivities.class, ao);
-        activities.add(Async.function(activity::composeGreeting, greeting + i, name));
-      }
-      Promise greetingActivities = Promise.allOf(activities);
-      String result = greetingActivities.get() + " " + name + "!";
+      GreetingActivities greetingActivities =
+          Workflow.newActivityStub(GreetingActivities.class, ao);
+      Promise<String> function =
+          Async.function(greetingActivities::composeGreeting, greeting, name);
+
+      String result = function.get() + " " + name + "!";
+
+      AfterGreetingActivities activity =
+          Workflow.newActivityStub(AfterGreetingActivities.class, ao);
+      activity.afterGreeting(greeting, name);
+
       System.out.println(
-          "Duration of childwf - " + Duration.between(startSW, System.nanoTime()).getSeconds());
+          "Duration of childwf - " + Duration.ofNanos(System.nanoTime() - startSW).getSeconds());
 
       return result;
     }
   }
 
   static class GreetingActivitiesImpl implements GreetingActivities {
+
     @Override
     public String composeGreeting(String greeting, String name) {
       byte[] taskToken = Activity.getTaskToken();
       sendRestRequest(taskToken);
       Activity.doNotCompleteOnReturn();
 
-      return "Activity paused";
+      return "Activity doNotCompleteOnReturn";
+    }
+  }
+
+  static class AfterGreetingActivitiesImpl implements AfterGreetingActivities {
+
+    @Override
+    public void afterGreeting(String greeting, String name) {
+      System.out.println(">>>> Activity still run");
     }
   }
 
