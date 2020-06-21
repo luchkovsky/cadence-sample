@@ -121,6 +121,9 @@ public class ChildWorkflow implements ApplicationRunner {
 
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
     String composeGreeting(String greeting, String name);
+
+    @SignalMethod
+    void stop(String name);
   }
 
   /** The child workflow interface. */
@@ -137,7 +140,6 @@ public class ChildWorkflow implements ApplicationRunner {
     String composeGreeting(String greeting, String name);
   }
 
-  /** do Sync. */
   public interface AfterGreetingActivities {
 
     @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
@@ -156,10 +158,11 @@ public class ChildWorkflow implements ApplicationRunner {
    * Cadence library to be able to create instances.
    */
   public static class GreetingChildImpl implements GreetingChild {
+    boolean stop;
 
-    public String compensateGreeting(String greeting, String name) {
-      System.out.println("Compensate Greeting " + greeting + name);
-      return null;
+    public void stop(String name) {
+      stop = true;
+      System.out.println(">>> Signal stop");
     }
 
     public String composeGreeting(String greeting, String name) {
@@ -174,14 +177,18 @@ public class ChildWorkflow implements ApplicationRunner {
 
       GreetingActivities greetingActivities =
           Workflow.newActivityStub(GreetingActivities.class, ao);
+      AfterGreetingActivities activity =
+          Workflow.newActivityStub(AfterGreetingActivities.class, ao);
+
       Promise<String> function =
           Async.function(greetingActivities::composeGreeting, greeting, name);
 
       String result = function.get() + " " + name + "!";
-
-      AfterGreetingActivities activity =
-          Workflow.newActivityStub(AfterGreetingActivities.class, ao);
-      activity.afterGreeting(greeting, name);
+      if (!stop) {
+        activity.afterGreeting(greeting, name);
+      } else {
+        System.out.println("xxx - Stop");
+      }
 
       System.out.println(
           "Duration of childwf - " + Duration.ofNanos(System.nanoTime() - startSW).getSeconds());
@@ -206,7 +213,8 @@ public class ChildWorkflow implements ApplicationRunner {
 
     @Override
     public void afterGreeting(String greeting, String name) {
-      System.out.println(">>>> Activity still run");
+      System.out.println("> Activity still running");
+      System.out.println(">>>> Activity still running");
     }
   }
 

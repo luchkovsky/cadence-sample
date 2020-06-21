@@ -36,8 +36,10 @@ import com.uber.cadence.worker.Worker.FactoryOptions.Builder;
 import com.uber.cadence.worker.WorkerOptions;
 import com.uber.cadence.workflow.Async;
 import com.uber.cadence.workflow.ChildWorkflowOptions;
+import com.uber.cadence.workflow.ChildWorkflowTimedOutException;
 import com.uber.cadence.workflow.Promise;
 import com.uber.cadence.workflow.Saga;
+import com.uber.cadence.workflow.SignalMethod;
 import com.uber.cadence.workflow.Workflow;
 import com.uber.cadence.workflow.WorkflowMethod;
 import com.uber.m3.tally.RootScopeBuilder;
@@ -56,6 +58,8 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 public class ParentApplicationWorkflow implements ApplicationRunner {
+
+  private static Worker.Factory factory;
 
   @Override
   public void run(ApplicationArguments args) {
@@ -77,7 +81,10 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     FactoryOptions factoryOptions =
         new Builder().setStickyWorkflowPollerOptions(pollerOptions).setMetricScope(scope).build();
 
-    Worker.Factory factory = new Worker.Factory("127.0.0.1", 7933, DOMAIN, factoryOptions);
+    IWorkflowService service = new WorkflowServiceTChannel("127.0.0.1", 7933);
+
+     factory = new Worker.Factory(service, DOMAIN, factoryOptions);
+
 
       String taskList = SampleConstants.getTaskListParent();
       WorkerOptions workerOptions =
@@ -148,9 +155,9 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
   /** The parent workflow interface. */
   public interface GreetingWorkflow {
 
-    /** @return greeting string */
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
     String getGreeting(String name);
+
   }
 
   /** The child workflow interface. */
@@ -158,9 +165,11 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
     String composeGreeting(String greeting, String name);
+
+    @SignalMethod
+    void stop(String name);
   }
 
-  /** The child workflow interface. */
   public interface CompensationGreetingChild {
 
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
@@ -190,19 +199,25 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
     @Override
     public String getGreeting(String name) {
+
       Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
 
-      String taskList = SampleConstants.getTaskListChild();
       ChildWorkflowOptions options =
           new ChildWorkflowOptions.Builder()
-              .setTaskList(taskList)
+              .setTaskList( SampleConstants.getTaskListChild())
               .setExecutionStartToCloseTimeout(Duration.ofSeconds(10)) // 10 sec
               .build();
 
       // Workflows are stateful. So a new stub must be created for each new child.
       GreetingChild child = Workflow.newChildWorkflowStub(GreetingChild.class, options);
+
+      ChildWorkflowOptions compensation =
+          new ChildWorkflowOptions.Builder()
+              .setTaskList( SampleConstants.getTaskListCompensation())
+              .setExecutionStartToCloseTimeout(Duration.ofSeconds(10)) // 10 sec
+              .build();
       // Workflows are stateful. So a new stub must be created for each new child.
-      CompensationGreetingChild childCompensation = Workflow.newChildWorkflowStub(CompensationGreetingChild.class, options);
+      CompensationGreetingChild childCompensation = Workflow.newChildWorkflowStub(CompensationGreetingChild.class, compensation);
 
       // This is a blocking call that returns only after the child has completed.
       Promise<String> greeting = Async.function(child::composeGreeting, "Hello", name);
@@ -212,7 +227,21 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
       saga.addCompensation(childCompensation::compensationGreeting, "Buy", name);
 
-      return greeting.get(); // blocks waiting for the child to complete.
+      String result = null;
+      try {
+        child.stop(name);
+        result = greeting.get();
+      } catch (ChildWorkflowTimedOutException e) {
+        WorkflowClient workflowClient =
+            WorkflowClient.newInstance("127.0.0.1", 7933, SampleConstants.DOMAIN);
+        IWorkflowService service = factory.getWorkflowService();
+
+        child.stop(name);
+
+        e.printStackTrace();
+        throw e;
+      }
+      return result; // blocks waiting for the child to complete.
     }
 
     private Promise<List<String>> runParentActivities() {
