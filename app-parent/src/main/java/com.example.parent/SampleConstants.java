@@ -29,4 +29,12 @@ public class SampleConstants {
   public static String getTaskListChild() {
     return getTaskListChild(1);
   }
+
+  private static String getTaskListCompensation(int i) {
+    return new StringJoiner("_").add(TASK_LIST_CHILD).add("Compensation").add(String.valueOf(i)).toString();
+  }
+
+  public static String getTaskListCompensation() {
+    return getTaskListCompensation(1);
+  }
 }
