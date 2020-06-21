@@ -162,22 +162,22 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
   public interface GreetingChild {
 
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
-    String composeGreeting(String greeting, String name);
+    public String composeGreeting(String greeting, String name);
 
     @SignalMethod
-    void stop(String name);
+    public void stop(String name);
   }
 
   public interface CompensationGreetingChild {
 
     @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
-    void compensationGreeting(String greeting, String name);
+    public void compensationGreeting(String greeting, String name);
   }
 
   public interface ParentActivities {
 
     @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
-    String composeParentGreeting();
+    public String composeParentGreeting();
   }
 
   static class ParentActivitiesImpl implements ParentActivities {
@@ -197,6 +197,16 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     public String getGreeting(String name) {
 
       Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
+      try {
+        return doGetGreeting(name, saga);
+      } catch (ChildWorkflowTimedOutException e) {
+        e.printStackTrace();
+        saga.compensate();
+        throw e;
+      }
+    }
+
+    private String doGetGreeting(String name, Saga saga) {
 
       ChildWorkflowOptions options =
           new ChildWorkflowOptions.Builder()
@@ -204,53 +214,32 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
               .setExecutionStartToCloseTimeout(Duration.ofSeconds(10)) // 10 sec
               .build();
 
+      ActivityOptions ao = new ActivityOptions.Builder()
+          .setTaskList(SampleConstants.getTaskListParent())
+          .setStartToCloseTimeout(Duration.ofSeconds(30)) // 30 sec for Parent
+          .build();
+
       // Workflows are stateful. So a new stub must be created for each new child.
       GreetingChild child = Workflow.newChildWorkflowStub(GreetingChild.class, options);
 
-      ChildWorkflowOptions compensation =
+      ChildWorkflowOptions compensationOptions =
           new ChildWorkflowOptions.Builder()
               .setTaskList( SampleConstants.getTaskListCompensation())
-              .setExecutionStartToCloseTimeout(Duration.ofSeconds(10)) // 10 sec
               .build();
       // Workflows are stateful. So a new stub must be created for each new child.
-      CompensationGreetingChild childCompensation = Workflow.newChildWorkflowStub(CompensationGreetingChild.class, compensation);
+      CompensationGreetingChild childCompensation = Workflow.newChildWorkflowStub(CompensationGreetingChild.class,
+          compensationOptions);
 
       // This is a blocking call that returns only after the child has completed.
-      Promise<String> greeting = Async.function(child::composeGreeting, "Hello", name);
-
-      // Do something else here.
-      Promise<String> parentPromise = runParentActivity();
-
+      Promise<String> childFlow = Async.function(child::composeGreeting, "Hello", name);
       saga.addCompensation(childCompensation::compensationGreeting, "Goodbye", name);
 
+      ParentActivities activity = Workflow.newActivityStub(ParentActivities.class, ao);
+      Async.function(activity::composeParentGreeting).get();
 
-
-      String result = null;
-      try {
-        child.stop(name);
-        result = greeting.get();
-      } catch (ChildWorkflowTimedOutException e) {
-        WorkflowClient workflowClient =
-            WorkflowClient.newInstance("127.0.0.1", 7933, SampleConstants.DOMAIN);
-        IWorkflowService service = factory.getWorkflowService();
-
-        child.stop(name);
-
-        e.printStackTrace();
-        throw e;
-      }
-      return result; // blocks waiting for the child to complete.
+      return  childFlow.get();
     }
 
-    private Promise<String> runParentActivity() {
 
-        ActivityOptions ao = new ActivityOptions.Builder()
-            .setTaskList(SampleConstants.getTaskListParent())
-            .setStartToCloseTimeout(Duration.ofSeconds(30)) // 30 sec for Parent
-            .build();
-
-        ParentActivities activity = Workflow.newActivityStub(ParentActivities.class, ao);
-        return Async.function(activity::composeParentGreeting);
-    }
   }
 }
