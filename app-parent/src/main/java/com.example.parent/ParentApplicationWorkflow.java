@@ -48,148 +48,144 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
-
 @Slf4j
 @Component
 public class ParentApplicationWorkflow implements ApplicationRunner {
 
-    private WorkflowClientProviderImpl provider;
+  private WorkflowClientProviderImpl provider;
 
-    @Override
-    public void run(ApplicationArguments args) {
-        registerDomain();
-        startFactory();
-        startFlow();
+  @Override
+  public void run(ApplicationArguments args) {
+    registerDomain();
+    startFactory();
+    startFlow();
+  }
+
+  private void startFactory() {
+    // Start a worker that hosts both parent and child workflow implementations.
+
+    PollerOptions pollerOptions =
+        new PollerOptions.Builder().setPollThreadCount(POLL_THREAD_COUNT).build();
+
+    FactoryOptions factoryOptions =
+        new Builder().setStickyWorkflowPollerOptions(pollerOptions).build();
+
+    // Custom IWorkflowService
+    IWorkflowService service = new WorkflowServiceTimeoutStoredChannel("127.0.0.1", 7933);
+
+    Worker.Factory factory = new Factory(service, DOMAIN, factoryOptions);
+
+    // Provider for WorkflowClient
+    provider = new WorkflowClientProviderImpl(factory, DOMAIN);
+
+    WorkerOptions workerOptions =
+        new WorkerOptions.Builder()
+            .setWorkflowPollerOptions(pollerOptions)
+            .setActivityPollerOptions(pollerOptions)
+            .build();
+
+    Worker workerParent = factory.newWorker(SampleConstants.getTaskListParent(), workerOptions);
+
+    workerParent.registerWorkflowImplementationTypes(GreetingWorkflowImpl.class);
+    workerParent.registerActivitiesImplementations(new ParentActivitiesImpl());
+
+    // Start listening to the workflow and activity task lists.
+    factory.start();
+  }
+
+  private void registerDomain() {
+    IWorkflowService cadenceService = new WorkflowServiceTChannel();
+    RegisterDomainRequest request = new RegisterDomainRequest();
+    request.setDescription("Java Samples");
+    request.setEmitMetric(false);
+    request.setName(DOMAIN);
+    int retentionPeriodInDays = 1;
+    request.setWorkflowExecutionRetentionPeriodInDays(retentionPeriodInDays);
+    try {
+      cadenceService.RegisterDomain(request);
+      System.out.println(
+          "Successfully registered domain \""
+              + DOMAIN
+              + "\" with retentionDays="
+              + retentionPeriodInDays);
+
+    } catch (DomainAlreadyExistsError e) {
+      log.error("Domain \"" + DOMAIN + "\" is already registered");
+    } catch (TException e) {
+      log.error("Error occurred", e);
     }
+  }
 
-    private void startFactory() {
-        // Start a worker that hosts both parent and child workflow implementations.
+  private void startFlow() {
+    GreetingWorkflow parentWorkflow;
 
-        PollerOptions pollerOptions =
-            new PollerOptions.Builder().setPollThreadCount(POLL_THREAD_COUNT).build();
-
-        FactoryOptions factoryOptions =
-            new Builder().setStickyWorkflowPollerOptions(pollerOptions).build();
-
-        // Custom IWorkflowService
-        IWorkflowService service = new WorkflowServiceTimeoutStoredChannel("127.0.0.1", 7933);
-
-        Worker.Factory factory = new Factory(service, DOMAIN, factoryOptions);
-
-        //Provider for WorkflowClient
-        provider = new WorkflowClientProviderImpl(factory, DOMAIN);
-
-        WorkerOptions workerOptions =
-            new WorkerOptions.Builder()
-                .setWorkflowPollerOptions(pollerOptions)
-                .setActivityPollerOptions(pollerOptions)
-                .build();
-
-        Worker workerParent = factory.newWorker(SampleConstants.getTaskListParent(), workerOptions);
-
-        workerParent.registerWorkflowImplementationTypes(GreetingWorkflowImpl.class);
-        workerParent.registerActivitiesImplementations(new ParentActivitiesImpl());
-
-        // Start listening to the workflow and activity task lists.
-        factory.start();
+    while (true) {
+      try {
+        doStartClient();
+      } catch (Exception e) {
+        log.error("Exception:", e);
+      }
     }
+  }
 
-    private void registerDomain() {
-        IWorkflowService cadenceService = new WorkflowServiceTChannel();
-        RegisterDomainRequest request = new RegisterDomainRequest();
-        request.setDescription("Java Samples");
-        request.setEmitMetric(false);
-        request.setName(DOMAIN);
-        int retentionPeriodInDays = 1;
-        request.setWorkflowExecutionRetentionPeriodInDays(retentionPeriodInDays);
-        try {
-            cadenceService.RegisterDomain(request);
-            System.out.println(
-                "Successfully registered domain \""
-                    + DOMAIN
-                    + "\" with retentionDays="
-                    + retentionPeriodInDays);
+  private void doStartClient() {
+    WorkflowClient workflowClient = provider.getWorkflowClient();
 
-        } catch (DomainAlreadyExistsError e) {
-            log.error("Domain \"" + DOMAIN + "\" is already registered");
-        } catch (TException e) {
-            log.error("Error occurred", e);
-        }
-    }
-
-    private void startFlow() {
-        GreetingWorkflow parentWorkflow;
-
-        while (true) {
-            try {
-                doStartClient();
-            } catch (Exception e) {
-                log.error("Exception:", e);
-            }
-        }
-    }
-
-    private void doStartClient() {
-        WorkflowClient workflowClient = provider.getWorkflowClient();
-
-        WorkflowOptions options = new WorkflowOptions.Builder()
+    WorkflowOptions options =
+        new WorkflowOptions.Builder()
             .setTaskList(SampleConstants.getTaskListParent())
             .setWorkflowId(new UID().toString())
             .build();
 
-        GreetingWorkflow parentWorkflow = workflowClient.newWorkflowStub(GreetingWorkflow.class, options);
-        WorkflowClient.start(parentWorkflow::getGreeting, "World");
-        System.out.println("Start new workflow:" + options.getWorkflowId());
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            log.error("Interrupted Exception", e);
-        }
+    GreetingWorkflow parentWorkflow =
+        workflowClient.newWorkflowStub(GreetingWorkflow.class, options);
+    WorkflowClient.start(parentWorkflow::getGreeting, "World");
+    System.out.println("Start new workflow:" + options.getWorkflowId());
+    try {
+      Thread.sleep(1000);
+    } catch (InterruptedException e) {
+      log.error("Interrupted Exception", e);
     }
+  }
 
-    /**
-     * The parent workflow interface.
-     */
-    public interface GreetingWorkflow {
+  /** The parent workflow interface. */
+  public interface GreetingWorkflow {
 
-        @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
-        String getGreeting(String name);
+    @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
+    String getGreeting(String name);
+  }
+
+  public interface ParentActivities {
+
+    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
+    public String composeParentGreeting();
+  }
+
+  static class ParentActivitiesImpl implements ParentActivities {
+
+    @Override
+    public String composeParentGreeting() {
+      return String.format(
+          "Finished parent activity: activity id: [%s], task: [%s]",
+          Activity.getTask().getActivityId(), new String(Activity.getTaskToken()));
     }
+  }
 
-    public interface ParentActivities {
+  /** GreetingWorkflow implementation that calls GreetingsActivities#printIt. */
+  public static class GreetingWorkflowImpl implements GreetingWorkflow {
 
-        @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
-        public String composeParentGreeting();
+    @Override
+    public String getGreeting(String name) {
+      ActivityOptions ao =
+          new ActivityOptions.Builder()
+              .setTaskList(SampleConstants.getTaskListParent())
+              .setStartToCloseTimeout(Duration.ofSeconds(30))
+              .build();
+
+      ParentActivities activity = Workflow.newActivityStub(ParentActivities.class, ao);
+      Async.function(activity::composeParentGreeting).get();
+
+      return "OK";
     }
-
-    static class ParentActivitiesImpl implements ParentActivities {
-
-        @Override
-        public String composeParentGreeting() {
-            return String.format(
-                "Finished parent activity: activity id: [%s], task: [%s]",
-                Activity.getTask().getActivityId(), new String(Activity.getTaskToken()));
-        }
-    }
-
-    /**
-     * GreetingWorkflow implementation that calls GreetingsActivities#printIt.
-     */
-    public static class GreetingWorkflowImpl implements GreetingWorkflow {
-
-        @Override
-        public String getGreeting(String name) {
-            ActivityOptions ao = new ActivityOptions.Builder()
-                .setTaskList(SampleConstants.getTaskListParent())
-                .setStartToCloseTimeout(Duration.ofSeconds(30))
-                .build();
-
-            ParentActivities activity = Workflow.newActivityStub(ParentActivities.class, ao);
-            Async.function(activity::composeParentGreeting).get();
-
-            return "OK";
-        }
-
-
-    }
+  }
 }
