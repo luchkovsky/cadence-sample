@@ -53,7 +53,6 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
   private WorkflowClientProviderImpl provider;
 
-
   @Override
   public void run(ApplicationArguments args) {
     registerDomain();
@@ -70,13 +69,8 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     FactoryOptions factoryOptions =
         new Builder().setStickyWorkflowPollerOptions(pollerOptions).build();
 
-    // Custom IWorkflowService
-    IWorkflowService service = new WorkflowServiceTimeoutStoredChannel("127.0.0.1", 7933);
-
+    IWorkflowService service = new WorkflowServiceTChannel("127.0.0.1", 7933);
     Worker.Factory factory = new Factory(service, DOMAIN, factoryOptions);
-
-    // Provider for WorkflowClient
-    // provider = new WorkflowClientProviderImpl(factory, DOMAIN);
 
     WorkerOptions workerOptions =
         new WorkerOptions.Builder()
@@ -122,7 +116,7 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
     IWorkflowService service = new WorkflowServiceTimeoutStoredChannel("127.0.0.1", 7933);
     WorkflowClient workflowClient = WorkflowClient.newInstance(service, DOMAIN);
-    // provider.getWorkflowClient();
+
     while (true) {
       try {
         doStartClient(workflowClient);
@@ -148,7 +142,7 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
       System.out.print(".");
     }
 
-    System.out.println("Start 100 workflows");
+    System.out.println("+ 100 workflows");
     try {
       Thread.sleep(500);
     } catch (InterruptedException e) {
@@ -183,11 +177,10 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     }
   }
 
-
   /** GreetingWorkflow implementation that calls GreetingsActivities#printIt. */
   public static class GreetingWorkflowImpl implements GreetingWorkflow {
 
-    private final static Random random = new Random();
+    private static final Random random = new Random();
 
     @Override
     public String getGreeting(String name) {
@@ -197,10 +190,9 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
       //              .build();
 
       ParentActivities activity = Workflow.newLocalActivityStub(ParentActivities.class);
-      if( random.nextBoolean() ) {
+      if (random.nextBoolean()) {
         Async.function(activity::composeParentGreeting).get();
-      }
-      else {
+      } else {
         activity.composeParentGreeting();
       }
 
