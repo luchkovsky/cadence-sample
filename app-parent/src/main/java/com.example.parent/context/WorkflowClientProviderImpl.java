@@ -1,6 +1,10 @@
 package com.example.parent.context;
 
 import com.uber.cadence.ClusterInfo;
+import com.uber.cadence.ListOpenWorkflowExecutionsRequest;
+import com.uber.cadence.ListOpenWorkflowExecutionsResponse;
+import com.uber.cadence.StartTimeFilter;
+import com.uber.cadence.WorkflowTypeFilter;
 import com.uber.cadence.client.WorkflowClient;
 import com.uber.cadence.serviceclient.IWorkflowService;
 import com.uber.cadence.worker.Worker;
@@ -22,7 +26,32 @@ public class WorkflowClientProviderImpl implements WorkflowClientProvider {
       CallBackOnError callBackOnError = new CallBackOnError(factory, domain, this);
       ((WorkflowServiceTimeoutStoredChannel) service).setCallbackOnError(callBackOnError);
       workflowClient = WorkflowClient.newInstance(service, domain);
+
+      try {
+        testRequest(factory, domain);
+      } catch (TException e) {
+        e.printStackTrace();
+      }
     }
+  }
+
+  private void testRequest(Factory factory, String domain) throws TException {
+
+    IWorkflowService service = factory.getWorkflowService();
+
+    ListOpenWorkflowExecutionsRequest request = new ListOpenWorkflowExecutionsRequest();
+    request.setDomain(domain);
+    //    WorkflowExecutionFilter filter = new WorkflowExecutionFilter();
+    //    request.setExecutionFilter(filter);
+    WorkflowTypeFilter typeFilter = new WorkflowTypeFilter();
+    typeFilter.setName("GreetingWorkflow");
+    request.setTypeFilter(typeFilter);
+    StartTimeFilter startTimeFilter = new StartTimeFilter();
+    startTimeFilter.setEarliestTime(System.currentTimeMillis() - 1000 * 60 * 10);
+    startTimeFilter.setLatestTime(System.currentTimeMillis() + 1000 * 60 * 10);
+    request.setStartTimeFilter(startTimeFilter);
+    ListOpenWorkflowExecutionsResponse response = service.ListOpenWorkflowExecutions(request);
+    System.out.println();
   }
 
   private static class CallBackOnError implements Functions.Func1<TException, Void> {

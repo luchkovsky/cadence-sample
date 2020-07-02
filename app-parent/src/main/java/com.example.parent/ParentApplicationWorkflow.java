@@ -26,7 +26,6 @@ import com.uber.cadence.DomainAlreadyExistsError;
 import com.uber.cadence.RegisterDomainRequest;
 import com.uber.cadence.activity.Activity;
 import com.uber.cadence.activity.ActivityMethod;
-import com.uber.cadence.activity.ActivityOptions;
 import com.uber.cadence.client.WorkflowClient;
 import com.uber.cadence.client.WorkflowOptions;
 import com.uber.cadence.internal.worker.PollerOptions;
@@ -41,7 +40,7 @@ import com.uber.cadence.workflow.Async;
 import com.uber.cadence.workflow.Workflow;
 import com.uber.cadence.workflow.WorkflowMethod;
 import java.rmi.server.UID;
-import java.time.Duration;
+import java.util.Random;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.thrift.TException;
 import org.springframework.boot.ApplicationArguments;
@@ -53,6 +52,7 @@ import org.springframework.stereotype.Component;
 public class ParentApplicationWorkflow implements ApplicationRunner {
 
   private WorkflowClientProviderImpl provider;
+
 
   @Override
   public void run(ApplicationArguments args) {
@@ -76,7 +76,7 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     Worker.Factory factory = new Factory(service, DOMAIN, factoryOptions);
 
     // Provider for WorkflowClient
-    provider = new WorkflowClientProviderImpl(factory, DOMAIN);
+    // provider = new WorkflowClientProviderImpl(factory, DOMAIN);
 
     WorkerOptions workerOptions =
         new WorkerOptions.Builder()
@@ -99,8 +99,10 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     request.setDescription("Java Samples");
     request.setEmitMetric(false);
     request.setName(DOMAIN);
+
     int retentionPeriodInDays = 1;
     request.setWorkflowExecutionRetentionPeriodInDays(retentionPeriodInDays);
+
     try {
       cadenceService.RegisterDomain(request);
       System.out.println(
@@ -117,32 +119,38 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
   }
 
   private void startFlow() {
-    GreetingWorkflow parentWorkflow;
 
+    IWorkflowService service = new WorkflowServiceTimeoutStoredChannel("127.0.0.1", 7933);
+    WorkflowClient workflowClient = WorkflowClient.newInstance(service, DOMAIN);
+    // provider.getWorkflowClient();
     while (true) {
       try {
-        doStartClient();
+        doStartClient(workflowClient);
       } catch (Exception e) {
         log.error("Exception:", e);
       }
     }
   }
 
-  private void doStartClient() {
-    WorkflowClient workflowClient = provider.getWorkflowClient();
+  private void doStartClient(WorkflowClient workflowClient) {
 
-    WorkflowOptions options =
-        new WorkflowOptions.Builder()
-            .setTaskList(SampleConstants.getTaskListParent())
-            .setWorkflowId(new UID().toString())
-            .build();
+    for (int i = 0; i < 100; i++) {
+      WorkflowOptions options =
+          new WorkflowOptions.Builder()
+              .setTaskList(SampleConstants.getTaskListParent())
+              .setWorkflowId(new UID().toString())
+              .build();
 
-    GreetingWorkflow parentWorkflow =
-        workflowClient.newWorkflowStub(GreetingWorkflow.class, options);
-    WorkflowClient.start(parentWorkflow::getGreeting, "World");
-    System.out.println("Start new workflow:" + options.getWorkflowId());
+      GreetingWorkflow parentWorkflow =
+          workflowClient.newWorkflowStub(GreetingWorkflow.class, options);
+      WorkflowClient.start(parentWorkflow::getGreeting, "World");
+
+      System.out.print(".");
+    }
+
+    System.out.println("Start 100 workflows");
     try {
-      Thread.sleep(1000);
+      Thread.sleep(500);
     } catch (InterruptedException e) {
       log.error("Interrupted Exception", e);
     }
@@ -157,7 +165,7 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
   public interface ParentActivities {
 
-    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
+    @ActivityMethod
     public String composeParentGreeting();
   }
 
@@ -165,25 +173,36 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
 
     @Override
     public String composeParentGreeting() {
+      try {
+        Thread.sleep(15000);
+      } catch (InterruptedException e) {
+        throw Activity.wrap(new RuntimeException("interrupted"));
+      }
       return String.format(
-          "Finished parent activity: activity id: [%s], task: [%s]",
-          Activity.getTask().getActivityId(), new String(Activity.getTaskToken()));
+          "Finished parent activity: activity id: [%s]", Activity.getTask().getActivityId());
     }
   }
+
 
   /** GreetingWorkflow implementation that calls GreetingsActivities#printIt. */
   public static class GreetingWorkflowImpl implements GreetingWorkflow {
 
+    private final static Random random = new Random();
+
     @Override
     public String getGreeting(String name) {
-      ActivityOptions ao =
-          new ActivityOptions.Builder()
-              .setTaskList(SampleConstants.getTaskListParent())
-              .setStartToCloseTimeout(Duration.ofSeconds(30))
-              .build();
+      //      LocalActivityOptions ao =
+      //          new LocalActivityOptions.Builder()
+      //              .setScheduleToCloseTimeout(Duration.ofSeconds(10))
+      //              .build();
 
-      ParentActivities activity = Workflow.newActivityStub(ParentActivities.class, ao);
-      Async.function(activity::composeParentGreeting).get();
+      ParentActivities activity = Workflow.newLocalActivityStub(ParentActivities.class);
+      if( random.nextBoolean() ) {
+        Async.function(activity::composeParentGreeting).get();
+      }
+      else {
+        activity.composeParentGreeting();
+      }
 
       return "OK";
     }
