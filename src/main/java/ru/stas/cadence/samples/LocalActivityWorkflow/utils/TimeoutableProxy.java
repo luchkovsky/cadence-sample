@@ -46,18 +46,20 @@ public class TimeoutableProxy {
                     if (activityMethod == null){
                        return method.invoke(activity, args);
                     }
+                    Object[] result = new Object[1];
                     CompletableFuture<?> future = runWithTimeout(new Runnable() {
                         @Override
                         public void run() {
                             try {
-                                method.invoke(activity, args);
+                                result[0]=method.invoke(activity, args);
                             } catch (Exception e) {
                                 throw new RuntimeException(e);
                             }
                         }
                     }, timeout, unit);
                     try {
-                        return future.get();
+                        future.get();
+                        return result[0];
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }

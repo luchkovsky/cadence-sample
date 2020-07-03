@@ -67,7 +67,8 @@ public class Hello {
                 result.completeFrom(Async.function(activities::composeGreeting,"composeGreeting"));
               });
       scope.run();*/
-            return  activities.composeGreeting("1");
+            String result = activities.composeGreeting("1");
+            return result;
 
         }
     }

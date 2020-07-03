@@ -12,7 +12,7 @@ public class GreetingActivitiesImpl implements GreetingActivities {
           System.out.println("Activity composeGreeting. Send long request");*/
         try {
             System.out.println("Activity composeGreeting. Sending long request");
-            Thread.sleep(15000);
+            Thread.sleep(1500);
             System.out.println("Activity composeGreeting. Sent request");
         } catch (InterruptedException e) {
             e.printStackTrace();
