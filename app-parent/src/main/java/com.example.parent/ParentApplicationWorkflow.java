@@ -168,11 +168,6 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     public void stop(String name);
   }
 
-  public interface CompensationGreetingChild {
-
-    @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
-    public void compensationGreeting(String greeting, String name);
-  }
 
   public interface ParentActivities {
 
@@ -196,17 +191,11 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
     @Override
     public String getGreeting(String name) {
 
-      Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
-      try {
-        return doGetGreeting(name, saga);
-      } catch (ChildWorkflowTimedOutException e) {
-        e.printStackTrace();
-        saga.compensate();
-        throw e;
-      }
+      return doGetGreeting(name);
+
     }
 
-    private String doGetGreeting(String name, Saga saga) {
+    private String doGetGreeting(String name) {
 
       ChildWorkflowOptions options =
           new ChildWorkflowOptions.Builder()
@@ -222,17 +211,9 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
       // Workflows are stateful. So a new stub must be created for each new child.
       GreetingChild child = Workflow.newChildWorkflowStub(GreetingChild.class, options);
 
-      ChildWorkflowOptions compensationOptions =
-          new ChildWorkflowOptions.Builder()
-              .setTaskList( SampleConstants.getTaskListCompensation())
-              .build();
-      // Workflows are stateful. So a new stub must be created for each new child.
-      CompensationGreetingChild childCompensation = Workflow.newChildWorkflowStub(CompensationGreetingChild.class,
-          compensationOptions);
 
       // This is a blocking call that returns only after the child has completed.
       Promise<String> childFlow = Async.function(child::composeGreeting, "Hello", name);
-      saga.addCompensation(childCompensation::compensationGreeting, "Goodbye", name);
 
       ParentActivities activity = Workflow.newActivityStub(ParentActivities.class, ao);
       Async.function(activity::composeParentGreeting).get();
