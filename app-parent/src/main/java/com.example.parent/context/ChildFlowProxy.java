@@ -4,30 +4,48 @@ import static lombok.AccessLevel.PRIVATE;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.uber.cadence.internal.sync.WorkflowInternal;
+import com.uber.cadence.workflow.Async;
+import com.uber.cadence.workflow.Promise;
 import com.uber.cadence.workflow.WorkflowMethod;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 
 
+
 @AllArgsConstructor(access = PRIVATE)
-public class StreamBreakingProxy {
+public class ChildFlowProxy {
 
     private final Queue<WorkflowExecutions> calls;
     private final Queue<WorkflowExecutions> results;
     private final ScheduledExecutorService executorService;
 
-    public StreamBreakingProxy(int capacity) {
-        calls = new ArrayBlockingQueue<WorkflowExecutions>(capacity);
-        results = new ArrayBlockingQueue<WorkflowExecutions>(capacity);
+    private final long time;
+    private final int  blockSize;
+    private final long  wait;
+
+    public ChildFlowProxy() {
+       this(1, 100, 1000);
+    }
+
+    public ChildFlowProxy(long time, int blockSize, long wait) {
+        this.time = time;
+        this.blockSize = blockSize;
+        this.wait = wait;
+
+
+        calls = new ArrayBlockingQueue<WorkflowExecutions>(blockSize);
+        results = new ArrayBlockingQueue<WorkflowExecutions>(blockSize);
         executorService = Executors.newScheduledThreadPool(
             1,
             new ThreadFactoryBuilder()
@@ -36,10 +54,8 @@ public class StreamBreakingProxy {
                 .build());
     }
 
-    private void delayedInvoker(long time, long wait, int blockSize) {
-        if (!executorService.isShutdown()) {
-            executorService.shutdown();
-        }
+    private void delayInvoke() {
+        executorService.shutdown();
         executorService.schedule(() -> {
             executeBatch(blockSize);
             try {
@@ -48,7 +64,7 @@ public class StreamBreakingProxy {
                 throw new RuntimeException(e);
             }
             if (!calls.isEmpty()) {
-                delayedInvoker(time, wait, blockSize);
+                delayInvoke();
             }
         }, time, TimeUnit.MILLISECONDS);
     }
@@ -57,7 +73,15 @@ public class StreamBreakingProxy {
         while (!calls.isEmpty() && results.size() < blockSize) {
             WorkflowExecutions context = calls.poll();
             try {
-                context.setResult(context.getMethod().invoke(context.getProxy(), context.getArgs()));
+                Promise<?> childFlow = Async.function( ()-> {
+                    try {
+                        context.getMethod().invoke(context.getTarget(), context.getArgs());
+                    } catch (Exception ex) {
+                        context.setException(ex);
+                    }
+                    return null;
+                });
+                context.setResult( childFlow.get() );
             } catch (Exception ex) {
                 context.setException(ex);
             }
@@ -66,8 +90,7 @@ public class StreamBreakingProxy {
     }
 
     @SuppressWarnings("unchecked")
-    public <T> T getProxy(Class<?> workflowInterface,
-        long time, int blockSize, long wait) {
+    public <T> T getProxy(Class<?> workflowInterface, T instance) {
         return (T) Proxy.newProxyInstance(
             WorkflowInternal.class.getClassLoader(),
             new Class<?>[]{workflowInterface},
@@ -78,26 +101,33 @@ public class StreamBreakingProxy {
 
                     WorkflowMethod workflowMethod = method.getAnnotation(WorkflowMethod.class);
                     if (workflowMethod == null) {
-                        return method.invoke(proxy, args);
+                       return method.invoke(instance, args);
                     }
-                    WorkflowExecutions context = WorkflowExecutions.builder()
-                        .proxy(proxy)
+                    calls.add(WorkflowExecutions.builder()
+                        .target(instance)
                         .method(method)
                         .args(args)
-                        .build();
-                    calls.add(context);
-                    delayedInvoker(time, wait, blockSize);
-                    return calls;
+                        .build());
+                    delayInvoke();
+
+                    return results;
                 }
             });
+    }
 
+    @SuppressWarnings("unchecked")
+    public <T> List<T> getResults() {
+        return (List<T>)results.stream().map(WorkflowExecutions::getResult).collect(Collectors.toList());
+    }
+
+    public void clearResults(){
+        results.clear();
     }
 
     @Data
     @Builder
     public static class WorkflowExecutions {
-
-        private Object proxy;
+        private Object target;
         private Method method;
         private Object[] args;
         private Object result;

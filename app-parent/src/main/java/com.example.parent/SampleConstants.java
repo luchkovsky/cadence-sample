@@ -9,8 +9,6 @@ public class SampleConstants {
 
   public static final String DOMAIN = "sample";
 
-  private static final Random random = new Random();
-
   private static final String TASK_LIST_PARENT = "HelloParent";
   private static final String TASK_LIST_CHILD = "HelloChild";
 
@@ -34,7 +32,4 @@ public class SampleConstants {
     return new StringJoiner("_").add(TASK_LIST_CHILD).add("Compensation").add(String.valueOf(i)).toString();
   }
 
-  public static String getTaskListCompensation() {
-    return getTaskListCompensation(1);
-  }
 }

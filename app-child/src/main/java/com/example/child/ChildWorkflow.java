@@ -21,6 +21,7 @@ import static com.example.parent.SampleConstants.DOMAIN;
 import static com.example.parent.SampleConstants.POLL_THREAD_COUNT;
 import static com.example.parent.SampleConstants.getTaskListChild;
 
+import com.example.child.ChildWorkflow.GreetingActivities;
 import com.example.parent.SampleConstants;
 import com.uber.cadence.DomainAlreadyExistsError;
 import com.uber.cadence.RegisterDomainRequest;
@@ -58,16 +59,6 @@ public class ChildWorkflow implements ApplicationRunner {
 
   @Override
   public void run(ApplicationArguments args) {
-    registerDomain();
-    startFactory();
-  }
-
-  private void startFactory() {
-    // Start a worker that hosts both parent and child workflow implementations.
-    Scope scope =
-        new RootScopeBuilder()
-            .reporter(new CustomCadenceClientStatsReporter())
-            .reportEvery(com.uber.m3.util.Duration.ofSeconds(1));
 
     PollerOptions pollerOptions =
         new PollerOptions.Builder().setPollThreadCount(POLL_THREAD_COUNT).build();
@@ -75,7 +66,6 @@ public class ChildWorkflow implements ApplicationRunner {
     FactoryOptions factoryOptions =
         new FactoryOptions.Builder()
             .setStickyWorkflowPollerOptions(pollerOptions)
-            .setMetricScope(scope)
             .build();
 
     Worker.Factory factory = new Worker.Factory("127.0.0.1", 7933, DOMAIN, factoryOptions);
@@ -83,49 +73,15 @@ public class ChildWorkflow implements ApplicationRunner {
     String taskList = SampleConstants.getTaskListChild();
     WorkerOptions workerOptions =
         new Builder()
-            .setMetricsScope(scope)
             .setActivityPollerOptions(pollerOptions)
             .setWorkflowPollerOptions(pollerOptions)
             .build();
 
     Worker workerChild = factory.newWorker(taskList, workerOptions);
-
-    workerChild.registerWorkflowImplementationTypes(
-        GreetingChildImpl.class, CompensationChildImpl.class);
-
-    workerChild.registerActivitiesImplementations(
-        new GreetingActivitiesImpl(),
-        new CompensationGreetingActivitiesImpl(),
-        new OtherActivitiesImpl(),
-        new CompensationOtherActivitiesImpl());
-
-    // Start listening to the workflow and activity task lists.
+    workerChild.registerActivitiesImplementations( new GreetingActivitiesImpl() );
     factory.start();
   }
 
-  private void registerDomain() {
-    IWorkflowService cadenceService = new WorkflowServiceTChannel();
-    RegisterDomainRequest request = new RegisterDomainRequest();
-    request.setDescription("Java Samples");
-    request.setEmitMetric(false);
-    request.setName(DOMAIN);
-    int retentionPeriodInDays = 1;
-    request.setWorkflowExecutionRetentionPeriodInDays(retentionPeriodInDays);
-    try {
-      cadenceService.RegisterDomain(request);
-      System.out.println(
-          "Successfully registered domain \""
-              + DOMAIN
-              + "\" with retentionDays="
-              + retentionPeriodInDays);
-
-    } catch (DomainAlreadyExistsError e) {
-      log.error("Domain \"" + DOMAIN + "\" is already registered");
-
-    } catch (TException e) {
-      log.error("Error occurred", e);
-    }
-  }
 
   /** The child workflow interface. */
   public interface GreetingChild {
@@ -134,12 +90,6 @@ public class ChildWorkflow implements ApplicationRunner {
     public String composeGreeting(String greeting, String name);
   }
 
-  /** The child workflow interface. */
-  public interface CompensationGreetingChild {
-
-    @WorkflowMethod(executionStartToCloseTimeoutSeconds = 60000)
-    public void compensate(String greeting, String name);
-  }
 
   /** Activity interface is just to call external service and doNotCompleteActivity. */
   public interface GreetingActivities {
@@ -148,133 +98,33 @@ public class ChildWorkflow implements ApplicationRunner {
     public String composeGreeting(String greeting, String name);
   }
 
-  public interface CompensationGreetingActivities {
 
-    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
-    public void compensate(String greeting, String name);
-  }
-
-  public interface CompensationOtherActivities {
-
-    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
-    public void compensate(String name);
-  }
-
-  public interface OtherActivities {
-
-    @ActivityMethod(scheduleToStartTimeoutSeconds = 60000)
-    public void otherActivity(String name);
-  }
-
-  public static class CompensationChildImpl implements CompensationGreetingChild {
-
-    public void compensate(String greeting, String name) {
-      System.out.println("Compensation Child Flow" + greeting + name);
-    }
-  }
-
-  public static class CompensationGreetingActivitiesImpl implements CompensationGreetingActivities {
-
-    public void compensate(String greeting, String name) {
-      System.out.println("Compensation Greeting Activity " + greeting + name);
-    }
-  }
-
-  public static class CompensationOtherActivitiesImpl
-      implements CompensationOtherActivities {
-
-    public void compensate(String name) {
-      System.out.println("Compensation After Greeting Activity " + name);
-    }
-  }
-
-  /**
-   * The child workflow implementation. A workflow implementation must always be public for the
-   * Cadence library to be able to create instances.
-   */
   public static class GreetingChildImpl implements GreetingChild {
 
     public String composeGreeting(String greeting, String name) {
-      Saga saga = new Saga(new Saga.Options.Builder().setParallelCompensation(false).build());
-      try {
-        return doComposeGreeting(greeting, name, saga);
-      } catch (ActivityException ex) {
-        saga.compensate();
-        throw ex;
-      }
-    }
-
-    private String doComposeGreeting(String greeting, String name, Saga saga) {
       ActivityOptions ao =
           new ActivityOptions.Builder()
               .setTaskList(getTaskListChild())
               .setStartToCloseTimeout(Duration.ofSeconds(10))
               .build();
 
-      GreetingActivities greetingActivities =
+      GreetingActivities stub =
           Workflow.newActivityStub(GreetingActivities.class, ao);
 
-      OtherActivities otherActivities =
-          Workflow.newActivityStub(OtherActivities.class, ao);
-
-      CompensationGreetingActivities greetingActivitiesCompensation =
-          Workflow.newActivityStub(CompensationGreetingActivities.class, ao);
-
-      CompensationOtherActivities otherActivityCompensation =
-          Workflow.newActivityStub(CompensationOtherActivities.class, ao);
-
-      otherActivities.otherActivity("Before");
-      saga.addCompensation(otherActivityCompensation::compensate, "Before");
-
-      String result = Async.function(greetingActivities::composeGreeting, greeting, name).get();
-      saga.addCompensation(greetingActivitiesCompensation::compensate, greeting, name);
-
-      otherActivities.otherActivity("After");
-      saga.addCompensation(otherActivityCompensation::compensate, "After");
-
-      return result;
+      Promise<String> function = Async.function(stub::composeGreeting, greeting, name);
+      return function.get();
     }
 
   }
 
-  static class GreetingActivitiesImpl implements GreetingActivities {
+  public static class GreetingActivitiesImpl implements GreetingActivities {
 
     @Override
     public String composeGreeting(String greeting, String name) {
-      byte[] taskToken = Activity.getTaskToken();
-      sendRestRequest(taskToken);
-      Activity.doNotCompleteOnReturn();
 
-      return "Activity doNotCompleteOnReturn";
+      return greeting + name;
     }
   }
 
-  static class OtherActivitiesImpl implements OtherActivities {
 
-    @Override
-    public void otherActivity(String name) {
-      System.out.println("Other Activities is running " + name);
-    }
-  }
-
-  private static void sendRestRequest(byte[] taskToken) {
-    try {
-      URL url = new URL("http://127.0.0.1:8090/api/cadence/async");
-      HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-      connection.setDoOutput(true);
-      connection.setInstanceFollowRedirects(false);
-      connection.setRequestMethod("PUT");
-      connection.setRequestProperty("Content-Type", "application/octet-stream");
-
-      OutputStream os = connection.getOutputStream();
-      os.write(taskToken);
-      os.flush();
-
-      connection.getResponseCode();
-      connection.disconnect();
-
-    } catch (Exception e) {
-      throw new RuntimeException(e);
-    }
-  }
 }
