@@ -20,6 +20,7 @@ package com.example.parent;
 import static com.example.parent.SampleConstants.DOMAIN;
 import static com.example.parent.SampleConstants.POLL_THREAD_COUNT;
 
+import com.example.parent.context.StreamBreakingProxy;
 import com.uber.cadence.DomainAlreadyExistsError;
 import com.uber.cadence.RegisterDomainRequest;
 import com.uber.cadence.activity.Activity;
@@ -36,14 +37,10 @@ import com.uber.cadence.worker.Worker.FactoryOptions.Builder;
 import com.uber.cadence.worker.WorkerOptions;
 import com.uber.cadence.workflow.Async;
 import com.uber.cadence.workflow.ChildWorkflowOptions;
-import com.uber.cadence.workflow.ChildWorkflowTimedOutException;
 import com.uber.cadence.workflow.Promise;
-import com.uber.cadence.workflow.Saga;
 import com.uber.cadence.workflow.SignalMethod;
 import com.uber.cadence.workflow.Workflow;
 import com.uber.cadence.workflow.WorkflowMethod;
-import com.uber.m3.tally.RootScopeBuilder;
-import com.uber.m3.tally.Scope;
 import java.rmi.server.UID;
 import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
@@ -67,17 +64,13 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
   }
 
   private void startFactory() {
-    // Start a worker that hosts both parent and child workflow implementations.
-    Scope scope =
-        new RootScopeBuilder()
-            .reporter(new CustomCadenceClientStatsReporter())
-            .reportEvery(com.uber.m3.util.Duration.ofSeconds(1));
+
 
     PollerOptions pollerOptions =
         new PollerOptions.Builder().setPollThreadCount(POLL_THREAD_COUNT).build();
 
     FactoryOptions factoryOptions =
-        new Builder().setStickyWorkflowPollerOptions(pollerOptions).setMetricScope(scope).build();
+        new Builder().setStickyWorkflowPollerOptions(pollerOptions).build();
 
     IWorkflowService service = new WorkflowServiceTChannel("127.0.0.1", 7933);
 
@@ -89,7 +82,6 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
           new WorkerOptions.Builder()
               .setWorkflowPollerOptions(pollerOptions)
               .setActivityPollerOptions(pollerOptions)
-              .setMetricsScope(scope)
               .build();
 
       Worker workerParent = factory.newWorker(taskList, workerOptions);
@@ -207,6 +199,7 @@ public class ParentApplicationWorkflow implements ApplicationRunner {
           .setTaskList(SampleConstants.getTaskListParent())
           .setStartToCloseTimeout(Duration.ofSeconds(30)) // 30 sec for Parent
           .build();
+
 
       // Workflows are stateful. So a new stub must be created for each new child.
       GreetingChild child = Workflow.newChildWorkflowStub(GreetingChild.class, options);

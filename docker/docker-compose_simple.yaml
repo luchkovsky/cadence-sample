@@ -1,0 +1,35 @@
+version: '3'
+volumes:
+  cadence_data: {}
+services:
+  cassandra:
+    image: cassandra:3.11
+    ports:
+      - "9042:9042"
+
+  cadence:
+    image: ubercadence/server:0.12.0-auto-setup
+    ports:
+      - "7933:7933"
+      - "7934:7934"
+      - "7935:7935"
+      - "7939:7939"
+      - "8005:8005"
+    volumes:
+      - ./cadence:/config/dynamicconfig_local
+      - cadence_data:/cadence
+    environment:
+      - "CASSANDRA_SEEDS=cassandra"
+      - "DYNAMIC_CONFIG_FILE_PATH=/config/dynamicconfig_local/development_local.yaml"
+      - "PROMETHEUS_ENDPOINT=$BIND_ON_IP:8005"
+    depends_on:
+      - cassandra
+
+  cadence-web:
+    image: ubercadence/web:3.9.0
+    environment:
+      - "CADENCE_TCHANNEL_PEERS=cadence:7933"
+    ports:
+      - "8088:8088"
+    depends_on:
+      - cadence
