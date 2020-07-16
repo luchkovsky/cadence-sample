@@ -1,12 +1,12 @@
-package com.example.parent;
+package com.example.parent.one;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class ParentApplication {
+public class ChildApplication {
 
   public static void main(String[] args) {
-    SpringApplication.run(ParentApplication.class, args);
+    SpringApplication.run(ChildApplication.class, args);
   }
 }

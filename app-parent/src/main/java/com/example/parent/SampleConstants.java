@@ -1,6 +1,5 @@
 package com.example.parent;
 
-import java.util.Random;
 import java.util.StringJoiner;
 
 public class SampleConstants {
@@ -9,10 +8,10 @@ public class SampleConstants {
 
   public static final String DOMAIN = "sample";
 
-  private static final String TASK_LIST_PARENT = "HelloParent";
-  private static final String TASK_LIST_CHILD = "HelloChild";
+  private static final String TASK_LIST_PARENT = "HelloParentX";
+  private static final String TASK_LIST_CHILD = "HelloChildX";
 
-  private static String getTaskListParent(int i) {
+  public static String getTaskListParent(int i) {
     return new StringJoiner("_").add(TASK_LIST_PARENT).add(String.valueOf(i)).toString();
   }
 
@@ -20,7 +19,7 @@ public class SampleConstants {
     return getTaskListParent(1);
   }
 
-  private static String getTaskListChild(int i) {
+  public static String getTaskListChild(int i) {
     return new StringJoiner("_").add(TASK_LIST_CHILD).add(String.valueOf(i)).toString();
   }
 
@@ -29,7 +28,10 @@ public class SampleConstants {
   }
 
   private static String getTaskListCompensation(int i) {
-    return new StringJoiner("_").add(TASK_LIST_CHILD).add("Compensation").add(String.valueOf(i)).toString();
+    return new StringJoiner("_")
+        .add(TASK_LIST_CHILD)
+        .add("Compensation")
+        .add(String.valueOf(i))
+        .toString();
   }
-
 }
